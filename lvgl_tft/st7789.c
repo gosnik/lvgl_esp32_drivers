@@ -4,21 +4,19 @@
  * Mostly taken from lbthomsen/esp-idf-littlevgl github.
  */
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "sdkconfig.h"
-
 #include "esp_log.h"
 
 #include "st7789.h"
 
 #include "disp_spi.h"
-#include "driver/gpio.h"
+#include "display_bsp.h"
 
 /*********************
  *      DEFINES
  *********************/
-#define TAG "st7789"
+#define TAG "ST7789"
+
 /**********************
  *      TYPEDEFS
  **********************/
@@ -40,12 +38,6 @@ static void st7789_send_data(void *data, uint16_t length);
 static void st7789_send_color(void *data, uint16_t length);
 
 static void st7789_reset(void);
-/* The user should init all the hardware related to the display in this
- * function, maybe it's better to do this outside the display code, e.g.
- * in main before calling anything related to LVGL.
- * Some platforms, like STM32CubeIDE init and configure all the hardware
- * with auto generated code. */
-static void bsp_init_hardware(void);
 /**********************
  *  STATIC VARIABLES
  **********************/
@@ -59,7 +51,7 @@ static void bsp_init_hardware(void);
  **********************/
 void st7789_init(void)
 {
-    bsp_init_hardware();
+    display_bsp_init_io();
 
     lcd_init_cmd_t st7789_init_cmds[] = {
         {0xCF, {0x00, 0x83, 0X30}, 3},
@@ -98,7 +90,7 @@ void st7789_init(void)
 
     st7789_reset();
 
-    printf("ST7789 initialization.\n");
+    ESP_LOGI(TAG, "Initialization.\n");
 
     //Send all the commands
     uint16_t cmd = 0;
@@ -106,7 +98,7 @@ void st7789_init(void)
         st7789_send_cmd(st7789_init_cmds[cmd].cmd);
         st7789_send_data(st7789_init_cmds[cmd].data, st7789_init_cmds[cmd].databytes&0x1F);
         if (st7789_init_cmds[cmd].databytes & 0x80) {
-                vTaskDelay(100 / portTICK_RATE_MS);
+            display_bsp_delay(100);
         }
         cmd++;
     }
@@ -119,7 +111,7 @@ void st7789_init(void)
 void st7789_enable_backlight(bool backlight)
 {
 #if ST7789_ENABLE_BACKLIGHT_CONTROL
-    printf("%s backlight.\n", backlight ? "Enabling" : "Disabling");
+    ESP_LOGI(TAG, "%s backlight.\n", backlight ? "Enabling" : "Disabling");
     uint32_t tmp = 0;
 
 #if (ST7789_BCKL_ACTIVE_LVL==1)
@@ -128,7 +120,7 @@ void st7789_enable_backlight(bool backlight)
     tmp = backlight ? 0 : 1;
 #endif
 
-    gpio_set_level(ST7789_BCKL, tmp);
+    display_bsp_backlight(tmp);
 #endif
 }
 
@@ -191,21 +183,21 @@ void st7789_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * colo
 static void st7789_send_cmd(uint8_t cmd)
 {
     disp_wait_for_pending_transactions();
-    bsp_gpio_dc(0);
+    display_bsp_gpio_dc(0);
     disp_spi_send_data(&cmd, 1);
 }
 
 static void st7789_send_data(void * data, uint16_t length)
 {
     disp_wait_for_pending_transactions();
-    bsp_gpio_dc(1);
+    display_bsp_gpio_dc(1);
     disp_spi_send_data(data, length);
 }
 
 static void st7789_send_color(void * data, uint16_t length)
 {
     disp_wait_for_pending_transactions();
-    bsp_gpio_dc(1);
+    display_bsp_gpio_dc(1);
     disp_spi_send_colors(data, length);
 }
 
@@ -213,10 +205,10 @@ static void st7789_send_color(void * data, uint16_t length)
 static void st7789_reset(void)
 {
 #if !defined(CONFIG_LV_DISP_ST7789_SOFT_RESET)
-    bsp_gpio_rst(0);
-    bsp_delay(100);
-    bsp_gpio_rst(1);
-    bsp_delay(100);
+    display_bsp_gpio_rst(0);
+    display_bsp_delay(100);
+    display_bsp_gpio_rst(1);
+    display_bsp_delay(100);
 #else
     st7789_send_cmd(ST7789_SWRESET);
 #endif
@@ -224,8 +216,6 @@ static void st7789_reset(void)
 
 static void st7789_set_orientation(uint8_t orientation)
 {
-    // ESP_ASSERT(orientation < 4);
-
     const char *orientation_str[] = {
         "PORTRAIT", "PORTRAIT_INVERTED", "LANDSCAPE", "LANDSCAPE_INVERTED"
     };
@@ -247,39 +237,3 @@ static void st7789_set_orientation(uint8_t orientation)
     st7789_send_data((void *) &data[orientation], 1);
 }
 
-static void bsp_delay(uint32_t delay_ms)
-{
-    vTaskDelay(delay_ms / portTICK_RATE_MS);
-}
-
-static void bsp_backlight(uint8_t state)
-{
-    gpio_set_level(ST7789_BCKL, state);
-}
-
-static void bsp_gpio_dc(uint8_t state)
-{
-    gpio_set_level(ST7789_DC, state);
-}
-
-static void bsp_gpio_rst(uint8_t state)
-{
-    gpio_set_level(ST7789_RST, state);
-}
-
-static void bsp_init_hardware(void)
-{
-    //Initialize non-SPI GPIOs
-    gpio_pad_select_gpio(ST7789_DC);
-    gpio_set_direction(ST7789_DC, GPIO_MODE_OUTPUT);
-
-#if !defined(CONFIG_LV_DISP_ST7789_SOFT_RESET)
-    gpio_pad_select_gpio(ST7789_RST);
-    gpio_set_direction(ST7789_RST, GPIO_MODE_OUTPUT);
-#endif
-
-#if ST7789_ENABLE_BACKLIGHT_CONTROL
-    gpio_pad_select_gpio(ST7789_BCKL);
-    gpio_set_direction(ST7789_BCKL, GPIO_MODE_OUTPUT);
-#endif
-}
